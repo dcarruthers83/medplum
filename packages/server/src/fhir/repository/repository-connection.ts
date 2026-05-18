@@ -11,7 +11,12 @@ import { DatabaseMode, getDatabasePool } from '../../database';
 import { getLogger } from '../../logger';
 import type { PgQueryable, TransactionIsolationLevel } from '../sql';
 import { isPoolClient, isRetryableTransactionError, normalizeDatabaseError } from '../sql';
-import type { RepositoryAccessLayer, RepositoryAccessOperation } from './access-tracker';
+import type {
+  ExecuteSqlOptions,
+  RepositoryAccessLayer,
+  RepositoryAccessOperation,
+  TransactionSqlOptions,
+} from './access-tracker';
 import { createRepositoryAccessTracker } from './access-tracker';
 import type { TransactionIdleStatus, TransactionIdleTrackerOptions } from './transaction-idle-tracker';
 import { TransactionIdleTracker } from './transaction-idle-tracker';
@@ -229,24 +234,25 @@ export class RepositoryConnection implements Disposable {
    * If in a transaction, then returns the transaction client (PoolClient).
    * Otherwise, returns the pool (Pool).
    * @param scope - The scope of the database client.
-   * @param mode - The database mode.
+   * @param options - SQL execution metadata.
    * @returns The database client.
    */
-  getDatabaseClient(scope: ConnectionScope, mode: DatabaseMode): PgQueryable {
+  getDatabaseClient(scope: ConnectionScope, options: ExecuteSqlOptions): PgQueryable {
+    this.recordResourceAccess('sql', options.operation, options.resourceTypes, options.source);
     this.assertNotClosed();
     this.assertScope(scope);
     if (this.conn) {
       // A held client might be pinned outside a transaction, but it still has one physical
       // database role. Do not let writer work accidentally run on a reader connection.
-      this.assertConnectionMode(mode);
+      this.assertConnectionMode(options.mode);
       return this.conn;
     }
     this.assertCanAcquireConnection();
-    if (mode === DatabaseMode.WRITER) {
+    if (options.mode === DatabaseMode.WRITER) {
       // If we ever use a writer, then all subsequent operations must use a writer.
       this.mode = RepositoryMode.WRITER;
     }
-    return getDatabasePool(this.mode === RepositoryMode.WRITER ? DatabaseMode.WRITER : mode);
+    return getDatabasePool(this.mode === RepositoryMode.WRITER ? DatabaseMode.WRITER : options.mode);
   }
 
   /**
@@ -283,6 +289,13 @@ export class RepositoryConnection implements Disposable {
     if (this.pinDepth > 0 && !err) {
       return;
     }
+
+    // releasing while a transaction is still active is a no-op when there is no error
+    // since the transaction is still in progress and the connection must be held until it ends
+    if (this.isInTransaction() && !err) {
+      return;
+    }
+
     const releaseErr = err || this.discardOnRelease;
     if (this.ownsClient) {
       const conn = this.conn;
@@ -311,18 +324,31 @@ export class RepositoryConnection implements Disposable {
     options: StatementTimeoutOptions,
     callback: () => Promise<TResult>
   ): Promise<TResult> {
+    let isLocal = false;
+
     await this.withConnectionStateLock(async () => {
       this.assertNotClosed();
-      this.assertOwnsClient();
       if (this.isInTransaction()) {
-        throw new Error('Cannot set statement timeout during an active transaction');
+        isLocal = true;
+      } else {
+        // when not in a transaction, don't allow changing the config of a borrowed connection since
+        // that would mean it gets returned to the owner in a different state than it was when borrowed
+        // this may be too restrictive, but hold the line for now
+        this.assertOwnsClient('Cannot set statement timeout on a borrowed connection');
       }
 
       const client = await this.getConnection(options.mode ?? DatabaseMode.WRITER);
 
-      await client.query(`SELECT set_config('statement_timeout', $1, false)`, [String(options.timeoutMs)]);
+      await client.query(`SELECT set_config('statement_timeout', $1, $2)`, [String(options.timeoutMs), isLocal]);
       this.pinDepth++;
-      this.discardOnRelease = true;
+      // A session-level SET (isLocal === false) leaves statement_timeout changed on the physical
+      // connection with no reliable way to restore its prior value, so the connection is dirty and
+      // must be discarded rather than returned to the pool. A transaction-local SET (isLocal === true)
+      // is reverted automatically by Postgres when the transaction ends, leaving the connection clean,
+      // so there is nothing to discard.
+      if (!isLocal) {
+        this.discardOnRelease = true;
+      }
     });
 
     try {
@@ -331,7 +357,7 @@ export class RepositoryConnection implements Disposable {
     } finally {
       await this.withConnectionStateLock(async () => {
         this.pinDepth--;
-        if (this.pinDepth === 0) {
+        if (!isLocal && this.pinDepth === 0 && !this.isInTransaction()) {
           this.releaseConnection();
         }
       });
@@ -443,7 +469,7 @@ export class RepositoryConnection implements Disposable {
   async withTransaction<TResult>(
     scope: ConnectionScope,
     callback: (txScope: ConnectionScope) => Promise<TResult>,
-    options?: { serializable?: boolean }
+    options: TransactionSqlOptions
   ): Promise<TResult> {
     this.assertNotClosed();
     const isolationLevel = options?.serializable ? 'SERIALIZABLE' : 'REPEATABLE READ';
@@ -465,6 +491,7 @@ export class RepositoryConnection implements Disposable {
             serializable: options?.serializable ?? false,
           });
         }
+        this.recordResourceAccess('sql', 'transaction', options.resourceTypes, options.source);
         const result = await callback(txScope);
         await this.commitTransaction(txScope);
         if (attempt > 0) {
@@ -746,9 +773,9 @@ export class RepositoryConnection implements Disposable {
     }
   }
 
-  private assertOwnsClient(): void {
+  private assertOwnsClient(errorMessage?: string): void {
     if (!this.ownsClient) {
-      throw new Error('Does not own database client');
+      throw new Error(errorMessage ?? 'Does not own database client');
     }
   }
 

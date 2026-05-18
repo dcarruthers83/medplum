@@ -5395,7 +5395,15 @@ describe.each<Project['features']>([undefined, ['range-search']])('project-scope
   describe('discourage sequential scans', () => {
     let querySpy: jest.SpyInstance;
     beforeEach(() => {
-      querySpy = jest.spyOn(repo.getDatabaseClient(DatabaseMode.READER), 'query');
+      querySpy = jest.spyOn(
+        repo.getDatabaseClient({
+          mode: DatabaseMode.READER,
+          operation: 'read',
+          resourceTypes: [],
+          source: 'search.test',
+        }),
+        'query'
+      );
     });
 
     afterEach(() => {
@@ -5417,8 +5425,6 @@ describe.each<Project['features']>([undefined, ['range-search']])('project-scope
       expect(querySpy).toHaveBeenNthCalledWith(1, expect.stringContaining('SET enable_seqscan = off'));
       expect(querySpy).toHaveBeenNthCalledWith(2, expect.stringContaining('SELECT'), expect.anything());
       expect(querySpy).toHaveBeenNthCalledWith(3, expect.stringContaining('RESET enable_seqscan'));
-
-      querySpy.mockRestore();
     });
 
     test('config.fhirSearchMinLimit', async () => {
@@ -5433,7 +5439,6 @@ describe.each<Project['features']>([undefined, ['range-search']])('project-scope
       await repo.search(parseSearchRequest('Patient?identifier=123&_count=1'));
       expect(querySpy).toHaveBeenCalledTimes(1);
       expect(querySpy).toHaveBeenNthCalledWith(1, expect.stringMatching(/LIMIT 39$/), expect.anything());
-      querySpy.mockClear();
     });
   });
 });
@@ -5744,7 +5749,12 @@ describe.each([true, false])('systemRepo', (rangeSearch) => {
         new SelectQuery('Patient').column('__version').where('id', '=', id);
 
       // patient1 at OLDER_VERSION, patient2 at Repository.VERSION
-      const client = systemRepo.getDatabaseClient(DatabaseMode.WRITER);
+      const client = systemRepo.getDatabaseClient({
+        mode: DatabaseMode.WRITER,
+        operation: 'write',
+        resourceTypes: ['Patient'],
+        source: 'search.test.maxResourceVersion',
+      });
       const OLDER_VERSION = Repository.VERSION - 1;
       await client.query('UPDATE "Patient" SET __version = $1 WHERE id = $2', [OLDER_VERSION, patient1.id]);
       expect((await getVersionQuery(patient1.id).execute(client))[0].__version).toStrictEqual(OLDER_VERSION);

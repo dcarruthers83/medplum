@@ -12,7 +12,12 @@ import { globalLogger } from '../logger';
  * @param systemRepo - The system repository to use
  */
 export async function rebuildR4SearchParameters(systemRepo: Repository): Promise<void> {
-  const client = systemRepo.getDatabaseClient(DatabaseMode.WRITER);
+  const client = systemRepo.getDatabaseClient({
+    mode: DatabaseMode.WRITER,
+    operation: 'write',
+    resourceTypes: ['SearchParameter'],
+    source: 'seeds.rebuildR4SearchParameters',
+  });
   await client.query('DELETE FROM "SearchParameter" WHERE "projectId" = $1', [r4ProjectId]);
 
   for (const filename of SEARCH_PARAMETER_BUNDLE_FILES) {

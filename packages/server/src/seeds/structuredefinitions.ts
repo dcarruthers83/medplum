@@ -12,7 +12,12 @@ import { globalLogger } from '../logger';
  * @param systemRepo - The system repository to use
  */
 export async function rebuildR4StructureDefinitions(systemRepo: Repository): Promise<void> {
-  const client = systemRepo.getDatabaseClient(DatabaseMode.WRITER);
+  const client = systemRepo.getDatabaseClient({
+    mode: DatabaseMode.WRITER,
+    operation: 'write',
+    resourceTypes: ['StructureDefinition'],
+    source: 'seeds.rebuildR4StructureDefinitions',
+  });
   await client.query(`DELETE FROM "StructureDefinition" WHERE "projectId" = $1`, [r4ProjectId]);
 
   await createStructureDefinitionsForBundle(systemRepo, readJson('fhir/r4/profiles-resources.json') as Bundle);
