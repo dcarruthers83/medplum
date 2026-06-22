@@ -1087,18 +1087,6 @@ describe('FHIR Repo Transactions', () => {
     );
   });
 
-  // test('withStatementTimeout resolves on borrowed repository connections while in transaction', async () => {
-  //   const query = jest.fn(async (_sql: string) => ({ rows: [] }));
-  //   const client = { query, release: jest.fn() } as unknown as PoolClient;
-  //   const borrowedClientRepo = createBorrowedRepo(client);
-  //   await repo.withTransaction(
-  //     async (txRepo) => {
-  //       await expect(txRepo.getSystemRepo().withStatementTimeout({ timeoutMs: 0 }, async () => 5)).resolves.toBe(5);
-  //     },
-  //     { resourceTypes: [], source: 'test.withStatementTimeout.rejectsBorrowed' }
-  //   );
-  // });
-
   test('withStatementTimeout prevents writer operations on a pinned reader connection', async () => {
     const errorSpy = jest.spyOn(getLogger(), 'error').mockImplementation(() => {});
     let reachedEnd = false;
