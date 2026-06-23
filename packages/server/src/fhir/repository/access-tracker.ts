@@ -67,8 +67,20 @@ export class RepositoryAccessTracker {
     mergeTransactionAccessFrame(current, popped);
   }
 
-  clearTransactionFrames(): void {
-    this.transactionFrames.length = 0;
+  /**
+   * Folds every live transaction frame into a single aggregate frame, empties the stack, and
+   * returns the aggregate (or undefined if no frames were live). Used on abnormal termination —
+   * e.g. when ROLLBACK itself fails and the whole transaction is torn down at once — where the
+   * normal per-level commit/rollback bookkeeping cannot run. Inner savepoint frames may still be
+   * unmerged at that point (a failed `ROLLBACK TO SAVEPOINT` skips {@link mergeLastTransactionFrame}),
+   * so they are folded in here to give the caller the full picture for a final log.
+   * @returns The aggregate of all live frames, or undefined if the stack was empty.
+   */
+  collapseTransactionFrames(): TransactionAccessFrame | undefined {
+    while (this.transactionFrames.length > 1) {
+      this.mergeLastTransactionFrame();
+    }
+    return this.transactionFrames.pop();
   }
 
   logTransactionAccess(frame: TransactionAccessFrame, status: 'committed' | 'rolled_back'): void {
