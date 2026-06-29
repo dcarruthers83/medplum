@@ -6,8 +6,8 @@ import { escapeIdentifier } from 'pg';
 import { loadTestConfig } from '../../config/loader';
 import type { MedplumServerConfig } from '../../config/types';
 import { closeDatabase, DatabaseMode, getDatabasePool, initDatabase } from '../../database';
-import { backfillDeleteHistoryTombstonesForResourceType } from './backfill-delete-history-tombstones';
 import type { MigrationActionResult } from '../types';
+import { backfillDeleteHistoryTombstonesForResourceType } from './backfill-delete-history-tombstones';
 
 const resourceType = 'DeleteTombstoneBackfillTest';
 const historyTable = `${resourceType}_History`;
