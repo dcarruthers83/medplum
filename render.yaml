@@ -34,7 +34,8 @@ services:
   # ---------------------------------------------------------------------------
   - type: keyvalue
     name: medplum-redis
-    plan: free                 # 256MB. Fine for a sandbox. Bump to `starter` for more headroom.
+    plan: starter              # 256MB. `free` (~25MB) is too small — Medplum OOMs on boot spinning up
+                               # ~10 BullMQ queues + caches. Do NOT use free here.
     region: oregon
     ipAllowList: []            # private/internal only -> no password needed
     maxmemoryPolicy: noeviction # REQUIRED: BullMQ jobs must never be evicted
