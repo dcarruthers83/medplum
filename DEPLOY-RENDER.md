@@ -133,6 +133,10 @@ actually need to deploy modified code.
 
 ## Troubleshooting
 
+- **Server crashes on boot with `ENOENT: ... open 'medplum.config.json'`:** the server
+  wasn't told to read config from env vars. Ensure `medplum-server` has **`dockerCommand: env`**
+  in `render.yaml` (or set the **Docker Command** field to `env` on the service in the dashboard),
+  then redeploy. Without it the image defaults to a config *file* that doesn't exist.
 - **Server deploy "live" but app can't reach API / login fails:** the app's
   `MEDPLUM_BASE_URL` is wrong or missing a trailing slash (Step 4). Fix and redeploy the app.
 - **Server crashes on boot with OOM:** bump `medplum-server` to `standard` (2GB).

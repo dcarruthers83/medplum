@@ -49,6 +49,11 @@ services:
     region: oregon
     image:
       url: docker.io/medplum/medplum-server:5.1.22   # pinned (matches local build). Bump the tag + redeploy to update.
+    # REQUIRED: passes `env` as the arg to the image ENTRYPOINT so the server loads config from
+    # MEDPLUM_* env vars. Without it the image defaults to file:medplum.config.json (which doesn't
+    # exist in the container) and crashes with ENOENT. Equivalent to `command: ['env']` in
+    # docker-compose.full-stack.yml.
+    dockerCommand: env
     healthCheckPath: /healthcheck
     # Persists uploaded files (FHIR Binary content) across deploys.
     # Requires a paid instance (free instances can't have disks). Remove this block if using `free`/`starter`.
