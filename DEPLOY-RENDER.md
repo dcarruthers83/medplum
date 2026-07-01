@@ -134,9 +134,12 @@ actually need to deploy modified code.
 ## Troubleshooting
 
 - **Server crashes on boot with `ENOENT: ... open 'medplum.config.json'`:** the server
-  wasn't told to read config from env vars. Ensure `medplum-server` has **`dockerCommand: env`**
-  in `render.yaml` (or set the **Docker Command** field to `env` on the service in the dashboard),
-  then redeploy. Without it the image defaults to a config *file* that doesn't exist.
+  wasn't told to read config from env vars. It needs the `dockerCommand` from `render.yaml`.
+  Note Render's **Docker Command replaces the image entrypoint** (it is not appended), so the
+  value must be the *full* startup command with `env` on the end:
+  `node --experimental-loader=@opentelemetry/instrumentation/hook.mjs --import ./packages/server/dist/otel/instrumentation.js packages/server/dist/index.js env`
+- **Server `Exited with status 128` with no application logs:** the Docker Command was set to just
+  `env` (which replaced the entrypoint and ran a bare `env`). Use the full command above instead.
 - **Server deploy "live" but app can't reach API / login fails:** the app's
   `MEDPLUM_BASE_URL` is wrong or missing a trailing slash (Step 4). Fix and redeploy the app.
 - **Server crashes on boot with OOM:** bump `medplum-server` to `standard` (2GB).
