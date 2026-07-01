@@ -1,0 +1,152 @@
+# =============================================================================
+# Medplum sandbox — all-in-one Render Blueprint
+# =============================================================================
+# Deploys a complete, self-contained Medplum instance on Render:
+#   * medplum-server  — API server (official Docker image, config via env vars)
+#   * medplum-app     — web UI      (official Docker image, API URL injected at runtime)
+#   * medplum-db      — managed Postgres
+#   * medplum-redis   — managed Key Value (Redis) for caching + BullMQ job queues
+#
+# Uses the official prebuilt images (docker.io/medplum/medplum-{server,app}:latest)
+# so nothing is built from source. If you later modify the code in this fork and
+# want to deploy YOUR build, see DEPLOY-RENDER.md ("Deploying your own fork code").
+#
+# IMPORTANT — two-phase setup: the *.onrender.com URLs are not known until the
+# services are first created. After the first apply, set the four URL env vars
+# (marked `sync: false` below) to the real assigned URLs and redeploy.
+# Full step-by-step: see DEPLOY-RENDER.md.
+#
+# Blueprint spec: https://render.com/docs/blueprint-spec
+# =============================================================================
+
+databases:
+  - name: medplum-db
+    plan: basic-256mb          # persistent paid tier (~$6/mo). Use `free` for a throwaway (deleted after 30 days).
+    region: oregon
+    postgresMajorVersion: "16" # matches the local docker-compose Postgres
+    databaseName: medplum
+    user: medplum
+    ipAllowList: []            # private: only reachable from your Render services
+
+services:
+  # ---------------------------------------------------------------------------
+  # Redis (Render "Key Value") — cache + BullMQ background job queues
+  # ---------------------------------------------------------------------------
+  - type: keyvalue
+    name: medplum-redis
+    plan: free                 # 256MB. Fine for a sandbox. Bump to `starter` for more headroom.
+    region: oregon
+    ipAllowList: []            # private/internal only -> no password needed
+    maxmemoryPolicy: noeviction # REQUIRED: BullMQ jobs must never be evicted
+
+  # ---------------------------------------------------------------------------
+  # Medplum API server
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: medplum-server
+    runtime: image
+    plan: standard             # 2GB RAM. The server is memory-hungry; `free`/`starter` (512MB) may OOM on boot.
+    region: oregon
+    image:
+      url: docker.io/medplum/medplum-server:5.1.22   # pinned (matches local build). Bump the tag + redeploy to update.
+    healthCheckPath: /healthcheck
+    # Persists uploaded files (FHIR Binary content) across deploys.
+    # Requires a paid instance (free instances can't have disks). Remove this block if using `free`/`starter`.
+    disk:
+      name: medplum-binary
+      mountPath: /usr/src/medplum/binary
+      sizeGB: 1
+    envVars:
+      - key: MEDPLUM_PORT
+        value: "8103"
+
+      # --- Public URLs: SET THESE to the real assigned URLs after the first deploy ---
+      # (Render prompts for sync:false vars at apply time; you can enter placeholders, then fix in step 2.)
+      - key: MEDPLUM_BASE_URL          # this server's own URL, WITH trailing slash, e.g. https://medplum-server-xxxx.onrender.com/
+        sync: false
+      - key: MEDPLUM_APP_BASE_URL      # the medplum-app URL, WITH trailing slash, e.g. https://medplum-app-xxxx.onrender.com/
+        sync: false
+      - key: MEDPLUM_STORAGE_BASE_URL  # this server's URL + storage/, e.g. https://medplum-server-xxxx.onrender.com/storage/
+        sync: false
+
+      # --- Database (auto-wired from the managed Postgres above) ---
+      - key: MEDPLUM_DATABASE_HOST
+        fromDatabase:
+          name: medplum-db
+          property: host
+      - key: MEDPLUM_DATABASE_PORT
+        fromDatabase:
+          name: medplum-db
+          property: port
+      - key: MEDPLUM_DATABASE_DBNAME
+        fromDatabase:
+          name: medplum-db
+          property: database
+      - key: MEDPLUM_DATABASE_USERNAME
+        fromDatabase:
+          name: medplum-db
+          property: user
+      - key: MEDPLUM_DATABASE_PASSWORD
+        fromDatabase:
+          name: medplum-db
+          property: password
+      # Render Postgres supports SSL; relax cert validation (managed cert isn't in a public CA chain).
+      # If you ever see "server does not support SSL connections", delete this var.
+      - key: MEDPLUM_DATABASE_SSL_REJECT_UNAUTHORIZED
+        value: "false"
+
+      # --- Redis (auto-wired from the managed Key Value above; internal = no password) ---
+      - key: MEDPLUM_REDIS_HOST
+        fromService:
+          type: keyvalue
+          name: medplum-redis
+          property: host
+      - key: MEDPLUM_REDIS_PORT
+        fromService:
+          type: keyvalue
+          name: medplum-redis
+          property: port
+
+      # --- Storage + misc (mirrors the repo's docker-compose.full-stack.yml) ---
+      - key: MEDPLUM_BINARY_STORAGE
+        value: "file:./binary/"
+      - key: MEDPLUM_SUPPORT_EMAIL
+        value: '"Medplum" <support@medplum.com>'
+      - key: MEDPLUM_ALLOWED_ORIGINS
+        value: "*"               # open CORS — simplest for a sandbox. Lock down to the app URL for anything real.
+      - key: MEDPLUM_INTROSPECTION_ENABLED
+        value: "true"
+      - key: MEDPLUM_VM_CONTEXT_BOTS_ENABLED
+        value: "true"
+      - key: MEDPLUM_DEFAULT_BOT_RUNTIME_VERSION
+        value: "vmcontext"
+      - key: MEDPLUM_MAX_JSON_SIZE
+        value: "1mb"
+      - key: MEDPLUM_MAX_BATCH_SIZE
+        value: "50mb"
+      # reCAPTCHA demo keys (same as the repo default). The seeded super-admin works without these;
+      # self-registration may be blocked by domain checks — prefer inviting colleagues from the admin UI.
+      - key: MEDPLUM_RECAPTCHA_SITE_KEY
+        value: "6LfHdsYdAAAAAC0uLnnRrDrhcXnziiUwKd8VtLNq"
+      - key: MEDPLUM_RECAPTCHA_SECRET_KEY
+        value: "6LfHdsYdAAAAAH9dN154jbJ3zpQife3xaiTvPChL"
+
+  # ---------------------------------------------------------------------------
+  # Medplum web app (UI) — static SPA served by nginx, API URL injected at runtime
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: medplum-app
+    runtime: image
+    plan: free                 # just nginx serving static files; cheap. `free` spins down when idle.
+    region: oregon
+    image:
+      url: docker.io/medplum/medplum-app:5.1.22   # pinned (matches local build). Bump the tag + redeploy to update.
+    envVars:
+      # The app image rewrites its built JS with this value on container start.
+      # SET THIS to the medplum-server URL (WITH trailing slash) after the first deploy.
+      - key: MEDPLUM_BASE_URL
+        sync: false
+      - key: MEDPLUM_REGISTER_ENABLED
+        value: "true"
+      - key: GOOGLE_CLIENT_ID
+        value: ""              # blank disables the "Sign in with Google" button
