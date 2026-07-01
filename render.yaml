@@ -157,3 +157,27 @@ services:
         value: "true"
       - key: GOOGLE_CLIENT_ID
         value: ""              # blank disables the "Sign in with Google" button
+
+  # ---------------------------------------------------------------------------
+  # Medplum Provider — example EHR / charting SPA (examples/medplum-provider)
+  # Built from source in this fork (no prebuilt image exists). Free static site.
+  # MEDPLUM_BASE_URL is baked in at BUILD time (Vite), so it must be a real value
+  # here (not sync:false) — set to the medplum-server URL, with trailing slash.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: medplum-provider
+    runtime: static
+    # Install the whole workspace, then build just the provider + its @medplum/* deps via turbo.
+    buildCommand: npm ci && npx turbo run build --filter=medplum-provider
+    staticPublishPath: ./examples/medplum-provider/dist
+    envVars:
+      - key: NODE_VERSION
+        value: "22.18.0"        # satisfies the repo's engines (>=22.18.0)
+      - key: MEDPLUM_BASE_URL
+        value: https://medplum-server-j26i.onrender.com/   # your sandbox API server
+      - key: MEDPLUM_REGISTER_ENABLED
+        value: "false"          # provider app: invite users from the admin console instead
+    routes:
+      - type: rewrite           # SPA: serve index.html for client-side routes
+        source: /*
+        destination: /index.html
